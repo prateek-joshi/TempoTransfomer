@@ -53,9 +53,10 @@ class Dataset:
         # Cast the waveform tensors' dtype to float32.
         waveform = tf.cast(waveform, dtype=tf.float32)
         # Convert the waveform to a spectrogram via a STFT.
-        spectrogram = tf.signal.stft(
-            waveform, frame_length=255, frame_step=128)
-        # Obtain the magnitude of the STFT.
+        # spectrogram = tf.signal.stft(
+        #     waveform, frame_length=255, frame_step=128)
+        spectrogram = librosa.cqt(waveform.numpy())
+        # Obtain the magnitude of the CQT.
         spectrogram = tf.abs(spectrogram)
         # Add a `channels` dimension, so that the spectrogram can be used
         # as image-like input data with convolution layers (which expect
@@ -66,8 +67,8 @@ class Dataset:
     def get_spectrogram_generator(self):
         self.get_data()
         wav_train, wav_val = self.get_waveform_generator()
-        spec_train = wav_train.map(self.get_spectrogram_and_label)
-        spec_val = wav_val.map(self.get_spectrogram_and_label)
+        spec_train = wav_train.map(lambda waveform, tempo: tf.py_function(self.get_spectrogram_and_label, [waveform, tempo], [tf.float32, tf.float32]))
+        spec_val = wav_val.map(lambda waveform, tempo: tf.py_function(self.get_spectrogram_and_label, [waveform, tempo], [tf.float32, tf.float32]))
         return spec_train, spec_val
 
     @staticmethod
@@ -78,7 +79,8 @@ class Dataset:
         # Convert the frequencies to log scale and transpose, so that the time is
         # represented on the x-axis (columns).
         # Add an epsilon to avoid taking a log of zero.
-        log_spec = np.log(spectrogram.T + np.finfo(float).eps)
+        # log_spec = np.log(spectrogram.T + np.finfo(float).eps)
+        log_spec = spectrogram
         height = log_spec.shape[0]
         width = log_spec.shape[1]
         X = np.linspace(0, np.size(spectrogram), num=width, dtype=int)
