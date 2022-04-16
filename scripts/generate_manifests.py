@@ -72,20 +72,40 @@ def get_details_ebroom(root):
 
 
 if __name__=='__main__':
-    ANNOT_PATH = {
-        'gtzan': 'E:\\TempoTransformer\\data\\GTZAN\\GTZAN-Rhythm_v2_ismir2015_lbd\\stats.csv',
-        'ebroom': 'E:\\TempoTransformer\\data\\ExtendedBallroom\\songs\\extendedballroom_v1.1.xml'
-    }
-    logging.info('Starting...')
-    gtzan_df = get_details_gtzan(ANNOT_PATH['gtzan'])
-    logging.info('Retrieved GTZAN data')
+    # ANNOT_PATH = {
+    #     'gtzan': 'E:\\TempoTransformer\\data\\GTZAN\\GTZAN-Rhythm_v2_ismir2015_lbd\\stats.csv',
+    #     'ebroom': 'E:\\TempoTransformer\\data\\ExtendedBallroom\\songs\\extendedballroom_v1.1.xml'
+    # }
+    # logging.info('Starting...')
+    # gtzan_df = get_details_gtzan(ANNOT_PATH['gtzan'])
+    # logging.info('Retrieved GTZAN data')
 
-    root = open_xml(ANNOT_PATH['ebroom'])
-    ebroom_df = get_details_ebroom(root)
-    logging.info('Retrieved ExtendedBallroom data')
-    final_df = pd.concat([gtzan_df, ebroom_df])
-    print(final_df.head())
-    print('\n')
-    print(final_df.tail())
-    final_df.to_pickle(args.o, compression=None)
-    logging.info(f'Written {len(final_df)} records to {args.o}')
+    # root = open_xml(ANNOT_PATH['ebroom'])
+    # ebroom_df = get_details_ebroom(root)
+    # logging.info('Retrieved ExtendedBallroom data')
+    # final_df = pd.concat([gtzan_df, ebroom_df])
+    # print(final_df.head())
+    # print('\n')
+    # print(final_df.tail())
+    # final_df.to_pickle(args.o, compression=None)
+    # logging.info(f'Written {len(final_df)} records to {args.o}')
+    df = pd.read_pickle('E:\\TempoTransformer\\data\\final_manifest.pkl', compression=None)
+    logging.info(f'Read {len(df.index)} records from input manifest')
+    new_df = pd.DataFrame(columns=df.columns)
+    for index, row in df.iterrows():
+        counter = 1
+        while counter<3:
+            new_filepath = row['audio_filepath'][:-4] + '-' + str(counter) + '.wav'
+            tempo = row['tempo']
+            genre = row['genre']
+            new_duration = 15
+            if os.path.exists(new_filepath):
+                new_df.loc[len(new_df.index)] = [new_filepath, tempo, genre, duration]
+            counter += 1
+                    
+
+    logging.info(f'New number of records: {len(new_df.index)}')
+    print(new_df.tail()['audio_filepath'].to_list())
+    print()
+    print(df.tail()['audio_filepath'].to_list())
+    new_df.to_csv(args.o, index=False)
