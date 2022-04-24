@@ -1,155 +1,79 @@
 import tensorflow as tf
+import tensorflow_addons as tfa
 from tensorflow import keras
-import math
 
-BUFFER_SIZE = 512
-BATCH_SIZE = 256
 
-# AUGMENTATION
-IMAGE_SIZE = 72
-PATCH_SIZE = 6
-NUM_PATCHES = (IMAGE_SIZE // PATCH_SIZE) ** 2
-
-# OPTIMIZER
-LEARNING_RATE = 0.001
-WEIGHT_DECAY = 0.0001
-
-# TRAINING
-EPOCHS = 50
-
-# ARCHITECTURE
-LAYER_NORM_EPS = 1e-6
-TRANSFORMER_LAYERS = 8
-PROJECTION_DIM = 64
-NUM_HEADS = 4
-TRANSFORMER_UNITS = [
-    PROJECTION_DIM * 2,
-    PROJECTION_DIM,
-]
-
-class ShiftedPatchTokenization(keras.layers.Layer):
-    def __init__(
-        self,
-        image_size=IMAGE_SIZE,
-        patch_size=PATCH_SIZE,
-        num_patches=NUM_PATCHES,
-        projection_dim=PROJECTION_DIM,
-        vanilla=False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.vanilla = vanilla  # Flag to swtich to vanilla patch extractor
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.half_patch = patch_size // 2
-        self.flatten_patches = keras.layers.Reshape((num_patches, -1))
-        self.projection = keras.layers.Dense(units=projection_dim)
-        self.layer_norm = keras.layers.LayerNormalization(epsilon=LAYER_NORM_EPS)
-
-    def crop_shift_pad(self, images, mode):
-        # Build the diagonally shifted images
-        if mode == "left-up":
-            crop_height = self.half_patch
-            crop_width = self.half_patch
-            shift_height = 0
-            shift_width = 0
-        elif mode == "left-down":
-            crop_height = 0
-            crop_width = self.half_patch
-            shift_height = self.half_patch
-            shift_width = 0
-        elif mode == "right-up":
-            crop_height = self.half_patch
-            crop_width = 0
-            shift_height = 0
-            shift_width = self.half_patch
-        else:
-            crop_height = 0
-            crop_width = 0
-            shift_height = self.half_patch
-            shift_width = self.half_patch
-
-        # Crop the shifted images and pad them
-        crop = tf.image.crop_to_bounding_box(
-            images,
-            offset_height=crop_height,
-            offset_width=crop_width,
-            target_height=self.image_size - self.half_patch,
-            target_width=self.image_size - self.half_patch,
-        )
-        shift_pad = tf.image.pad_to_bounding_box(
-            crop,
-            offset_height=shift_height,
-            offset_width=shift_width,
-            target_height=self.image_size,
-            target_width=self.image_size,
-        )
-        return shift_pad
-
-    def call(self, images):
-        if not self.vanilla:
-            # Concat the shifted images with the original image
-            images = tf.concat(
-                [
-                    images,
-                    self.crop_shift_pad(images, mode="left-up"),
-                    self.crop_shift_pad(images, mode="left-down"),
-                    self.crop_shift_pad(images, mode="right-up"),
-                    self.crop_shift_pad(images, mode="right-down"),
-                ],
-                axis=-1,
+class MultiHeadSelfAttention(tf.keras.layers.Layer):
+    def __init__(self, embed_dim, num_heads=8):
+        super(MultiHeadSelfAttention, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        if embed_dim % num_heads != 0:
+            raise ValueError(
+                f"embedding dimension = {embed_dim} should be divisible by number of heads = {num_heads}"
             )
-        # Patchify the images and flatten it
-        patches = tf.image.extract_patches(
-            images=images,
-            sizes=[1, self.patch_size, self.patch_size, 1],
-            strides=[1, self.patch_size, self.patch_size, 1],
-            rates=[1, 1, 1, 1],
-            padding="VALID",
+        self.projection_dim = embed_dim // num_heads
+        self.query_dense = keras.layers.Dense(embed_dim)
+        self.key_dense = keras.layers.Dense(embed_dim)
+        self.value_dense = keras.layers.Dense(embed_dim)
+        self.combine_heads = keras.layers.Dense(embed_dim)
+
+    def attention(self, query, key, value):
+        score = tf.matmul(query, key, transpose_b=True)
+        dim_key = tf.cast(tf.shape(key)[-1], tf.float32)
+        scaled_score = score / tf.math.sqrt(dim_key)
+        weights = tf.nn.softmax(scaled_score, axis=-1)
+        output = tf.matmul(weights, value)
+        return output, weights
+
+    def separate_heads(self, x, batch_size):
+        x = tf.reshape(
+            x, (batch_size, -1, self.num_heads, self.projection_dim)
         )
-        flat_patches = self.flatten_patches(patches)
-        if not self.vanilla:
-            # Layer normalize the flat patches and linearly project it
-            tokens = self.layer_norm(flat_patches)
-            tokens = self.projection(tokens)
-        else:
-            # Linearly project the flat patches
-            tokens = self.projection(flat_patches)
-        return (tokens, patches)
+        return tf.transpose(x, perm=[0, 2, 1, 3])
 
+    def call(self, inputs):
+        batch_size = tf.shape(inputs)[0]
+        query = self.query_dense(inputs)
+        key = self.key_dense(inputs)
+        value = self.value_dense(inputs)
+        query = self.separate_heads(query, batch_size)
+        key = self.separate_heads(key, batch_size)
+        value = self.separate_heads(value, batch_size)
 
-class PatchEncoder(keras.layers.Layer):
-    def __init__(
-        self, num_patches=NUM_PATCHES, projection_dim=PROJECTION_DIM, **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.num_patches = num_patches
-        self.position_embedding = keras.layers.Embedding(
-            input_dim=num_patches, output_dim=projection_dim
+        attention, weights = self.attention(query, key, value)
+        attention = tf.transpose(attention, perm=[0, 2, 1, 3])
+        concat_attention = tf.reshape(
+            attention, (batch_size, -1, self.embed_dim)
         )
-        self.positions = tf.range(start=0, limit=self.num_patches, delta=1)
-
-    def call(self, encoded_patches):
-        encoded_positions = self.position_embedding(self.positions)
-        encoded_patches = encoded_patches + encoded_positions
-        return encoded_patches
+        output = self.combine_heads(concat_attention)
+        return output
 
 
-class MultiHeadAttentionLSA(keras.layers.MultiHeadAttention):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # The trainable temperature term. The initial value is
-        # the square root of the key dimension.
-        self.tau = tf.Variable(math.sqrt(float(self._key_dim)), trainable=True)
-
-    def _compute_attention(self, query, key, value, attention_mask=None, training=None):
-        query = tf.multiply(query, 1.0 / self.tau)
-        attention_scores = tf.einsum(self._dot_product_equation, key, query)
-        attention_scores = self._masked_softmax(attention_scores, attention_mask)
-        attention_scores_dropout = self._dropout_layer(
-            attention_scores, training=training
+class TransformerBlock(tf.keras.layers.Layer):
+    def __init__(self, embed_dim, num_heads, mlp_dim, dropout=0.1):
+        super(TransformerBlock, self).__init__()
+        self.att = MultiHeadSelfAttention(embed_dim, num_heads)
+        self.mlp = tf.keras.Sequential(
+            [
+                keras.layers.Dense(mlp_dim, activation=tfa.activations.gelu),
+                keras.layers.Dropout(dropout),
+                keras.layers.Dense(embed_dim),
+                keras.layers.Dropout(dropout),
+            ]
         )
-        attention_output = tf.einsum(
-            self._combine_equation, attention_scores_dropout, value
-        )
-        return attention_output, attention_scores
+        self.layernorm1 = keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = keras.layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = keras.layers.Dropout(dropout)
+        self.dropout2 = keras.layers.Dropout(dropout)
+
+    def call(self, inputs, training):
+        inputs_norm = self.layernorm1(inputs)
+        attn_output = self.att(inputs_norm)
+        attn_output = self.dropout1(attn_output, training=training)
+        out1 = attn_output + inputs
+
+        out1_norm = self.layernorm2(out1)
+        mlp_output = self.mlp(out1_norm)
+        mlp_output = self.dropout2(mlp_output, training=training)
+        return mlp_output + out1
