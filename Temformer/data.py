@@ -81,14 +81,20 @@ class TempoDataset:
             # Obtain the magnitude of the spectrogram.
             cqt_spectrogram = tf.abs(cqt_spectrogram)
             spectrogram = cqt_spectrogram[..., tf.newaxis]
+        spectrogram = tf.image.resize(spectrogram, [128, 128])
         return spectrogram, tempo
         # return spectogram, tempo
+
+    def _set_shapes(self, spec, tempo):
+        spec.set_shape([128, 128, 1])
+        return spec, tempo
 
     def get_spectrogram_generator(self):
         self.get_data()
         wav_train, wav_val = self.get_waveform_generator()
         spec_train = wav_train.map(lambda waveform, tempo: tf.py_function(self.get_spectrogram_and_label, [waveform, tempo], [tf.float32, tf.float32]))
         spec_val = wav_val.map(lambda waveform, tempo: tf.py_function(self.get_spectrogram_and_label, [waveform, tempo], [tf.float32, tf.float32]))
+
         return spec_train, spec_val
 
     @staticmethod
@@ -109,7 +115,7 @@ class TempoDataset:
 
 if __name__=='__main__':
     MANIFEST_PATH = 'E:\\TempoTransformer\\data\\final_manifest_new.csv'
-    d = TempoDataset(MANIFEST_PATH, val_split=0.05,n_fft=2048, fft=False)
+    d = TempoDataset(MANIFEST_PATH, val_split=0.05,n_fft=2048)
     train,val = d.get_spectrogram_generator()
 
     rows = 2
