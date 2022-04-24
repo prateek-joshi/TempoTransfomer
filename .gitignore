@@ -32,3 +32,5 @@
 **/rock.00027.wav.xml
 **/rock.00090.wav.xml
 **/*.tar
+**/checkpoints/*
+**/__pycache__
