@@ -34,3 +34,5 @@
 **/*.tar
 **/checkpoints/*
 **/__pycache__
+**/train/*
+**/validation/*
